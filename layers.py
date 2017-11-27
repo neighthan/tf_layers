@@ -1,6 +1,6 @@
 import tensorflow as tf
 from computer_vision.scripts.utils import flatten
-from typing import Union, Sequence, Optional
+from typing import Union, Sequence, Optional, Callable, Dict, Any
 
 _OneOrMore = lambda type_: Union[type_, Sequence[type_]]
 
@@ -149,7 +149,7 @@ class BranchedLayer(_Layer):
     input given to be returned as the output as well.
     """
 
-    def __init__(self, layers:Sequence[_Layer]):
+    def __init__(self, layers: Sequence[_Layer]):
         """
         :param List[_Layer] layers:
         """
@@ -190,7 +190,7 @@ class MergeLayer(_Layer):
     Takes a BranchedLayer and merges it back into one.
     """
 
-    def __init__(self, axis:int):
+    def __init__(self, axis: int):
         super().__init__()
         self.params.update(dict(axis=axis))
 
@@ -324,8 +324,8 @@ class LSTMLayer(_Layer):
 
         index = tf.range(0, n_seqs) * max_seq_len + (lengths - 1)
 
-        outputs = tf.gather(tf.reshape(outputs, [-1, n_output_features]), index) # flatten time dimension, select proper timestep for each seq
-        outputs = tf.reshape(outputs, (-1, n_output_features), name=output_name) # so TF has explicit shape information about this tensor
+        outputs = tf.gather(tf.reshape(outputs, [-1, n_output_features]), index)  # flatten time dimension, select proper timestep for each seq
+        outputs = tf.reshape(outputs, (-1, n_output_features), name=output_name)  # so TF has explicit shape information about this tensor
         return outputs
 
     def apply(self, inputs: _OneOrMore(tf.Tensor), is_training: tf.Tensor) -> _OneOrMore(tf.Tensor):
@@ -385,3 +385,19 @@ class LayerModule(_Layer):
         for layer in self.layers:
             output = layer.apply(output, is_training)
         return output
+
+
+class CustomLayer(_Layer):
+    """
+    A layer that applies a user-provided function. This can be used when a layer doesn't exist that fits your use case.
+    Examples:
+        Softmax layer: CustomLayer(tf.nn.softmax)
+        Slice layer: CustomLayer(tf.slice, {'begin': [0, 0, 0, 0], 'size': [-1, 1, -1, -1]})
+    """
+
+    def __init__(self, layer_func: Callable, params: Optional[Dict[str, Any]]=None, batch_norm: bool=False):
+        super().__init__()
+        if params is not None:
+            self.params.update(params)
+        self.layer = layer_func
+        self.batch_norm = batch_norm
