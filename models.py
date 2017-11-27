@@ -12,8 +12,8 @@ import pickle
 from ast import literal_eval
 from tempfile import TemporaryDirectory
 import shutil
+from typing import List, Optional, Dict, Any, Union, Sequence, Callable
 from computer_vision.scripts.utils import tf_init, get_next_run_num, get_abs_path, acc_at_k
-from typing import List, Optional, Dict, Any, Union, Sequence
 from computer_vision.scripts.layers import ConvLayer, MaxPoolLayer, AvgPoolLayer, BranchedLayer, MergeLayer, LayerModule,\
     FlattenLayer, DenseLayer, DropoutLayer, GlobalAvgPoolLayer, GlobalMaxPoolLayer, LSTMLayer, _Layer
 import warnings
@@ -43,13 +43,14 @@ class BaseNN(object):
     the model can calculate accuracy@1 and accuracy@5, so it expects >= 5-way classification.
     """
 
-    _param_names = ['layers', 'n_classes', 'n_regress_tasks', 'task_names', 'model_name', 'random_state',
+    _param_names = ['input_shape', 'layers', 'n_classes', 'n_regress_tasks', 'task_names', 'model_name', 'random_state',
                     'batch_size', 'data_params', 'early_stop_metric_name', 'uses_dataset']
     _tensor_attributes = ['loss_op', 'train_op', 'is_training']
     _collection_names = ['inputs_p', 'labels_p', 'predict', 'metrics']
 
     def __init__(
             self,
+            input_shape: Union[Sequence[int], Dict[str, Sequence[int]]],
             layers:        Optional[List[_Layer]] = None,
             models_dir:                       str = '',
             n_regress_tasks:                  int = 0,
@@ -89,6 +90,7 @@ class BaseNN(object):
 
             assert type(layers) is not None
             assert n_regress_tasks > 0 or len(n_classes) > 0
+            self.input_shape = input_shape if type(input_shape) == dict else {'default': input_shape}
             self.model_name = model_name
             self.layers = layers
             self.n_regress_tasks = n_regress_tasks
@@ -202,10 +204,10 @@ class BaseNN(object):
             feed_dict.update({self.labels_p[name]: labels[name] for name in labels})
         return feed_dict
 
-    def _batch(self, tensors: _OneOrMore(tf.Tensor), inputs: Dict[str, np.ndarray],
-               labels: Optional[Dict[str, np.ndarray]] = None,
-               range_=None, idx: Sequence[int] = None, return_all_data: bool = True, is_training: bool = False,
-               dataset: bool = False):
+    def _batch(self, tensors: _OneOrMore(tf.Tensor), inputs: Optional[Dict[str, np.ndarray]]=None,
+               labels: Optional[Dict[str, np.ndarray]]=None,
+               range_=None, idx: Sequence[int]=None, return_all_data: bool=True, is_training: bool=False,
+               dataset: bool=False, generator=None):
         """
 
         :param tensors:
@@ -222,6 +224,11 @@ class BaseNN(object):
         :param dataset: whether the model uses the tensorflow Dataset class. If so, self.data_init_op will be run with
                         inputs, labels fed in. Otherwise, batches of inputs, labels will be fed in separately each time
                         the tensors are run. Either way, is_training will be fed in at each batch.
+        :param generator: a generator that should return the inputs (and possibly labels) to feed in.
+                          If a tuple is returned, it must be (inputs, labels). Otherwise, it is assumed that only inputs
+                          have been given. inputs, labels should each be either a numpy array or a dictionary mapping
+                          task names to numpy arrays. If they aren't a dictionary, they'll be converted like
+                          {'default': inputs}
         :returns:
         """
 
@@ -230,12 +237,14 @@ class BaseNN(object):
 
         if dataset:
             self.sess.run(self.data_init_op, self._get_feed_dict(inputs, labels))
-            range_ = range_ if range_ is not None else range(int(1e50))  # loop until dataset runs out
-        else:
+            range_ = range_ if range_ is not None else range(int(1e18))  # loop until dataset runs out
+        elif inputs is not None:  # inputs passed in directly
             if idx is None:
                 idx = list(range(len(next(iter(inputs.values())))))
             if range_ is None:
                 range_ = range(int(np.ceil(len(idx) / self.batch_size)))
+        else:
+            assert generator is not None, "generator must be given if inputs is None"
 
         try:
             self.sess.run(self.local_init)
@@ -250,16 +259,33 @@ class BaseNN(object):
                 feed_dict = {self.is_training: is_training}
 
                 if not dataset:
-                    batch_idx = idx[batch * self.batch_size: (batch + 1) * self.batch_size]
-                    feed_dict.update({self.inputs_p[name]: inputs[name][batch_idx] for name in inputs})
-                    if labels is not None:
-                        feed_dict.update({self.labels_p[name]: labels[name][batch_idx] for name in labels})
+                    if generator:
+                        generated = next(generator)
+                        if type(generated) == tuple:
+                            inputs, labels = generated
+
+                            if type(labels) != dict:
+                                labels = {'default': labels}
+
+                            feed_dict.update({self.labels_p[name]: labels[name] for name in labels})
+                        else:
+                            inputs = generated
+
+                        if type(inputs) != dict:
+                            inputs = {'default': inputs}
+                        feed_dict.update({self.inputs_p[name]: inputs[name] for name in inputs})
+                    else:
+                        batch_idx = idx[batch * self.batch_size: (batch + 1) * self.batch_size]
+                        feed_dict.update({self.inputs_p[name]: inputs[name][batch_idx] for name in inputs})
+                        if labels is not None:
+                            feed_dict.update({self.labels_p[name]: labels[name][batch_idx] for name in labels})
 
                 vals = self.sess.run(tensors, feed_dict)
                 if return_all_data:
                     for i in range(len(tensors)):
                         ret[i].append(vals[i])
-        except tf.errors.OutOfRangeError:
+        except (tf.errors.OutOfRangeError, StopIteration):
+            # StopIteration if using a generator; OutOfRangeError if using a tf.Dataset
             pass
 
         if return_all_data:
@@ -346,11 +372,16 @@ class BaseNN(object):
         for tensor_name in tensor_names:
             self.__setattr__(tensor_name, self.graph.get_tensor_by_name(f"{tensor_name}:0"))
 
-    def train(self, train_inputs: Union[np.ndarray, Dict[str, np.ndarray]],
-              train_labels: Union[np.ndarray, Dict[str, np.ndarray]],
-              dev_inputs: Union[np.ndarray, Dict[str, np.ndarray]],
-              dev_labels: Union[np.ndarray, Dict[str, np.ndarray]],
-              n_epochs: int = 100, max_patience: int = 5, verbose: int = 0):
+    def train(self,
+              train_inputs: Optional[Union[np.ndarray, Dict[str, np.ndarray]]]=None,
+              train_labels: Optional[Union[np.ndarray, Dict[str, np.ndarray]]]=None,
+              dev_inputs: Optional[Union[np.ndarray, Dict[str, np.ndarray]]]=None,
+              dev_labels: Optional[Union[np.ndarray, Dict[str, np.ndarray]]]=None,
+              train_generator: Optional[Callable]=None,
+              dev_generator: Optional[Callable]=None,
+              n_train_batches_per_epoch: Optional[int]=None,
+              n_dev_batches_per_epoch: Optional[int]=None,
+              n_epochs: int=100, max_patience: int=5, verbose: int=0):
         """
         The best epoch is the one where the early stop metric on the dev set is the highest. "best" in reference to other
         metrics means the value of that metric at the best epoch.
@@ -358,9 +389,20 @@ class BaseNN(object):
         :param train_labels:
         :param dev_inputs:
         :param dev_labels:
-        :param n_epochs:
+        :param n_epochs: the maximum number of epochs to train for; see max_patience for when training may stop earlier
         :param max_patience:
         :param verbose: 3 for tnrange, 2 for trange, 1 for range w/ print, 0 for range
+        :param train_generator: a function that, when called, returns a generator that returns the inputs
+                                (and possibly labels) to feed in during training. If a tuple is returned from the generator,
+                                it must be (inputs, labels). Otherwise, it is assumed that only inputs have been given.
+                                inputs, labels should each be either a numpy array or a dictionary mapping task names to
+                                numpy arrays. If they aren't a dictionary, they'll be converted like {'default': inputs}.
+                                A new generator will be created for each epoch by calling this function.
+        :param dev_generator: like train_generator except that the inputs/labels should be of the dev set
+        :param n_train_batches_per_epoch: how many batches to train on each epoch; if None, this will be set to the
+                                          number needed to iterate through train_inputs, if given. If train_inputs is
+                                          also None, each epoch will go until StopIteration.
+        :param n_dev_batches_per_epoch: like n_train_batches_per_epoch but for the dev set
         :returns: {name: value} of the various metrics at the best epoch; includes train_time and whether training was
                   completed
         """
@@ -377,9 +419,21 @@ class BaseNN(object):
             epoch_range = range
             batch_range = range
 
-        train_inputs, train_labels, dev_inputs, dev_labels = [x if type(x) is dict else {'default': x}
-                                                              for x in
-                                                              [train_inputs, train_labels, dev_inputs, dev_labels]]
+        if train_inputs is not None:  # inputs passed in directly
+            train_inputs, train_labels, dev_inputs, dev_labels = [x if type(x) is dict else {'default': x} for x in
+                                                                  [train_inputs, train_labels, dev_inputs, dev_labels]]
+            train_idx = list(range(len(next(iter(train_labels.values())))))
+            dev_idx = list(range(len(next(iter(dev_labels.values())))))
+            n_train_batches_per_epoch = int(np.ceil(len(train_idx) / self.batch_size)) if n_train_batches_per_epoch is None else n_train_batches_per_epoch
+            n_dev_batches_per_epoch = int(np.ceil(len(dev_idx) / self.batch_size)) if n_dev_batches_per_epoch is None else n_dev_batches_per_epoch
+        else:  # generators given
+            assert train_generator is not None, "train_generator must be given if train_inputs is None"
+            assert dev_generator is not None, "dev_generator must be given if train_inputs is None"
+
+            train_idx = None
+            dev_idx = None
+            n_train_batches_per_epoch = n_train_batches_per_epoch if n_train_batches_per_epoch is not None else int(1e18)
+            n_dev_batches_per_epoch = n_dev_batches_per_epoch if n_dev_batches_per_epoch is not None else int(1e18)
 
         if self._metric_improved(0, 1):  # higher is better; start low
             best_early_stop_metric = -np.inf
@@ -387,27 +441,25 @@ class BaseNN(object):
             best_early_stop_metric = np.inf
 
         patience = max_patience
-        train_idx = list(range(len(next(iter(train_labels.values())))))
-        dev_idx = list(range(len(next(iter(dev_labels.values())))))
-        train_batches_per_epoch = int(np.ceil(len(train_idx) / self.batch_size))
-        dev_batches_per_epoch = int(np.ceil(len(dev_idx) / self.batch_size))
 
         metric_names = list(self.metrics.keys())
         metric_ops = [self.metrics[name] for name in metric_names] + [self.loss_op]
 
         epochs = epoch_range(n_epochs)
         for epoch in epochs:
-            np.random.shuffle(train_idx)
+            if train_idx:
+                np.random.shuffle(train_idx)
 
             self.sess.run(self.local_init)
-            batches = batch_range(train_batches_per_epoch)
+            batches = batch_range(n_train_batches_per_epoch)
             ret = self._batch([self.loss_op, self.train_op], train_inputs, train_labels, batches, train_idx,
-                              is_training=True, dataset=self.uses_dataset)
+                              is_training=True, dataset=self.uses_dataset, generator=train_generator())
             train_loss = np.array(ret)[0, :].mean()
 
             self.sess.run(self.local_init)
-            batches = batch_range(dev_batches_per_epoch)
-            ret = self._batch(metric_ops, dev_inputs, dev_labels, batches, dev_idx, dataset=self.uses_dataset)
+            batches = batch_range(n_dev_batches_per_epoch)
+            ret = self._batch(metric_ops, dev_inputs, dev_labels, batches, dev_idx, dataset=self.uses_dataset,
+                              generator=dev_generator())
             ret = np.array(ret)
 
             dev_loss = ret[-1, :].mean()
@@ -475,11 +527,11 @@ class CNN(BaseNN):
     """
     """
 
-    _param_names = ['img_width', 'img_height', 'n_channels', 'l2_lambda', 'learning_rate', 'beta1', 'beta2',
-                    'add_scaling', 'decay_learning_rate', 'combined_train_op']
+    _param_names = ['l2_lambda', 'learning_rate', 'beta1', 'beta2', 'add_scaling', 'decay_learning_rate', 'combined_train_op']
 
     def __init__(
             self,
+            input_shape: Union[Sequence[int], Dict[str, Sequence[int]]],
             layers:        Optional[List[_Layer]] = None,
             models_dir:                       str = '',
             n_regress_tasks:                  int = 0,
@@ -493,9 +545,6 @@ class CNN(BaseNN):
             data_params: Optional[Dict[str, Any]] = None,
             log_to_bson:                     bool = False,
             # begin class specific parameters
-            img_width:             int = 128,
-            img_height:            int = 128,
-            n_channels:            int = 3,
             l2_lambda: Optional[float] = None,
             learning_rate:       float = 0.001,
             beta1:               float = 0.9,
@@ -504,15 +553,12 @@ class CNN(BaseNN):
             decay_learning_rate:  bool = False,
             combined_train_op:    bool = True
     ):
-        load_model = os.path.isdir(f'{models_dir}/{model_name}/')
-        super().__init__(layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
+        load_model = models_dir and model_name and os.path.isdir(f'{models_dir}/{model_name}/')
+        super().__init__(input_shape, layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
                          batch_size, record, random_state, data_params, log_to_bson, early_stop_metric_name='acc_default',
                          uses_dataset=False)
 
         if not load_model:
-            self.img_height = img_height
-            self.img_width = img_width
-            self.n_channels = n_channels
             self.l2_lambda = l2_lambda
             self.learning_rate = learning_rate
             self.beta1 = beta1
@@ -540,15 +586,21 @@ class CNN(BaseNN):
 
         self.graph = tf.Graph()
         with self.graph.as_default():
-            self.inputs_p = {'default': tf.placeholder(tf.float32, name='inputs_p',
-                                                       shape=(None, self.img_height, self.img_width, self.n_channels))}
+            self.inputs_p = {name: tf.placeholder(tf.float32, name=f'inputs_p_{name}', shape=(None, *self.input_shape[name]))
+                             for name in self.input_shape}
             self.is_training = tf.placeholder_with_default(False, [], name='is_training')
 
+            # need a list instead of a dict
             if self.add_scaling:
-                mean, std = tf.nn.moments(self.inputs_p['default'], axes=[1, 2], keep_dims=True)
-                hidden = (self.inputs_p['default'] - mean) / tf.sqrt(std)
+                hidden = []
+                for name in self.inputs_p:
+                    mean, var = tf.nn.moments(self.inputs_p[name], axes=[-1], keep_dims=True)
+                    hidden.append((self.inputs_p[name] - mean) / var)
             else:
-                hidden = self.inputs_p['default']
+                hidden = list(self.inputs_p.values())
+
+            if len(hidden) == 1:  # single input
+                hidden = hidden[0]
 
             for layer in self.layers:
                 hidden = layer.apply(hidden, is_training=self.is_training)
