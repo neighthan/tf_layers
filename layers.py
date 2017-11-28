@@ -14,7 +14,7 @@ _layers = {
     'conv2d': tf.layers.conv2d,
     'max_pooling2d': tf.layers.max_pooling2d,
     'average_pooling2d': tf.layers.average_pooling2d,
-    'flatten': tf.contrib.layers.flatten,
+    'flatten': tf.layers.flatten,
     'dense': tf.layers.dense,
     'dropout': tf.layers.dropout,
     'concat': tf.concat
@@ -28,15 +28,17 @@ _initializers = {
 class _Layer(object):
     """
     A layer must have the following attributes:
-      - self.params: a dictionary that specifies keyword arguments for the layer
-      - self.batch_norm: a string specifying whether to use batch_norm 'before' the weight of this layer, 'after' them,
-                         or '' to have no batch_normalization
-      - self.layer: a tensorflow layer function which accepts self.params as kwargs and input as the first positional argument
-    or else the layer must override apply (see, e.g., BranchedLayer).
+      - params: a dictionary that specifies keyword arguments for the layer
+      - batch_norm: a string specifying whether to use batch_norm 'before' the weight of this layer, 'after' them,
+                    or '' to have no batch_normalization
+      - layer: a tensorflow layer function which accepts self.params as kwargs and input as the first positional argument
+               or else the layer must override apply (see, e.g., BranchedLayer).
     """
 
     def __init__(self):
         self.params = {}
+        self.batch_norm = False
+        self.layer = lambda x, **kwargs: x
 
     def apply(self, inputs: tf.Tensor, is_training: tf.Tensor) -> tf.Tensor:
         """
@@ -74,7 +76,7 @@ class _Layer(object):
 
 class ConvLayer(_Layer):
     def __init__(self, n_filters: int, kernel_size: _OneOrMore(int), strides: int=1,
-                 activation: str='relu', padding: str='same', batch_norm: str='before'):
+                 activation: str='relu', padding: str='same', batch_norm: str='before', reuse: bool=False):
         super().__init__()
         self.params.update(dict(
             filters=n_filters,
@@ -82,7 +84,8 @@ class ConvLayer(_Layer):
             strides=strides,
             activation=_activations[activation],
             padding=padding,
-            kernel_initializer='variance_scaling_initializer'
+            kernel_initializer='variance_scaling_initializer',
+            reuse=tf.AUTO_REUSE if reuse else False
         ))
         self.batch_norm = batch_norm
 
@@ -246,12 +249,13 @@ class FlattenLayer(_Layer):
 
 
 class DenseLayer(_Layer):
-    def __init__(self, n_units: int, activation: str='relu', batch_norm: str='before'):
+    def __init__(self, n_units: int, activation: str='relu', batch_norm: str='before', reuse: bool=False):
         super().__init__()
         self.params.update(dict(
             units=n_units,
             activation=_activations[activation],
-            kernel_initializer='variance_scaling_initializer'
+            kernel_initializer='variance_scaling_initializer',
+            reuse=tf.AUTO_REUSE if reuse else False
         ))
         self.batch_norm = batch_norm
 
@@ -285,7 +289,9 @@ class DropoutLayer(_Layer):
 class LSTMLayer(_Layer):
     """
     TODO: is batchnorm between LSTM (or recurrent layers in general) a (good) thing? What about just between LSTM and FC?
+    TODO: this layer probably needs some maintenance...
     """
+
     def __init__(self, n_units: _OneOrMore(int), activation: str='tanh', ret: str='output', last_only: bool=True,
                  scope: str='lstm'):
         """
@@ -405,9 +411,10 @@ class CustomLayer(_Layer):
 
 class EmbeddingLayer(_Layer):
 
-    def __init__(self, vocab_size: int, embedding_size: int, embeddings_name: str='embeddings'):
+    def __init__(self, vocab_size: int, embedding_size: int, reuse: bool=False, embeddings_name: str='embeddings'):
         super().__init__()
         self.params.update({'name': embeddings_name, 'shape': [vocab_size, embedding_size]})
+        self.reuse = tf.AUTO_REUSE if reuse else False
 
     def apply(self, inputs: tf.Tensor, is_training: tf.Tensor) -> tf.Tensor:
         """
@@ -416,4 +423,5 @@ class EmbeddingLayer(_Layer):
         :returns:
         """
 
-        return tf.nn.embedding_lookup(tf.get_variable(**self.params), inputs)
+        with tf.variable_scope('', reuse=self.reuse):
+            return tf.nn.embedding_lookup(tf.get_variable(**self.params), inputs)
