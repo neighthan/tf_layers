@@ -39,18 +39,16 @@ class BaseNN(object):
     """
     This class implements several methods that may be used by neural networks in general. It doesn't actually create any
     layers, so it shouldn't be used directly.
-    Currently, this class only works for classification, not regression. It also defines the score method already and expects that
-    the model can calculate accuracy@1 and accuracy@5, so it expects >= 5-way classification.
     """
 
-    _param_names = ['input_shape', 'layers', 'n_classes', 'n_regress_tasks', 'task_names', 'model_name', 'random_state',
+    _param_names = ['input_data', 'layers', 'n_classes', 'n_regress_tasks', 'task_names', 'model_name', 'random_state',
                     'batch_size', 'data_params', 'early_stop_metric_name', 'uses_dataset']
     _tensor_attributes = ['loss_op', 'train_op', 'is_training']
     _collection_names = ['inputs_p', 'labels_p', 'predict', 'metrics']
 
     def __init__(
             self,
-            input_shape: Union[Sequence[int], Dict[str, Sequence[int]]],
+            input_data: Optional[Union[tuple, Dict[str, tuple]]] = None,
             layers:        Optional[List[_Layer]] = None,
             models_dir:                       str = '',
             n_regress_tasks:                  int = 0,
@@ -66,6 +64,28 @@ class BaseNN(object):
             early_stop_metric_name:           str = 'dev_loss',
             uses_dataset:                    bool = False
     ):
+        """
+
+        :param input_data: one tuple per input that has (shape, dtype) where dtype is stored as a string.
+                           Ex: ((32, 32, 3), 'float32') for 32x32 images with 3 channels stored as floats. Note that
+                           all inputs will have a None dimension prepended to their shape to allow variable-length
+                           batches. The batch dimension thus should not be included in the given shapes.
+                           If using multiple inputs, pass a dictionary mapping from input names to (shape, dtype).
+        :param layers:
+        :param models_dir:
+        :param n_regress_tasks:
+        :param n_classes:
+        :param task_names:
+        :param config:
+        :param model_name:
+        :param batch_size:
+        :param record:
+        :param random_state:
+        :param data_params:
+        :param log_to_bson:
+        :param early_stop_metric_name:
+        :param uses_dataset:
+        """
 
         if config is None:
             config = tf_init()
@@ -90,7 +110,7 @@ class BaseNN(object):
 
             assert type(layers) is not None
             assert n_regress_tasks > 0 or len(n_classes) > 0
-            self.input_shape = input_shape if type(input_shape) == dict else {'default': input_shape}
+            self.input_data = input_data if type(input_data) == dict else {'default': input_data}
             self.model_name = model_name
             self.layers = layers
             self.n_regress_tasks = n_regress_tasks
@@ -531,7 +551,7 @@ class CNN(BaseNN):
 
     def __init__(
             self,
-            input_shape: Union[Sequence[int], Dict[str, Sequence[int]]],
+            input_data: Optional[Union[tuple, Dict[str, tuple]]] = None,
             layers:        Optional[List[_Layer]] = None,
             models_dir:                       str = '',
             n_regress_tasks:                  int = 0,
@@ -554,7 +574,7 @@ class CNN(BaseNN):
             combined_train_op:    bool = True
     ):
         load_model = models_dir and model_name and os.path.isdir(f'{models_dir}/{model_name}/')
-        super().__init__(input_shape, layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
+        super().__init__(input_data, layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
                          batch_size, record, random_state, data_params, log_to_bson, early_stop_metric_name='acc_default',
                          uses_dataset=False)
 
@@ -586,8 +606,11 @@ class CNN(BaseNN):
 
         self.graph = tf.Graph()
         with self.graph.as_default():
-            self.inputs_p = {name: tf.placeholder(tf.float32, name=f'inputs_p_{name}', shape=(None, *self.input_shape[name]))
-                             for name in self.input_shape}
+            # dtype is stored as a string so that it can easily be saved/reloaded with the model. Because of this, we
+            # have to get the tf dtype associated with that string name
+            self.inputs_p = {name: tf.placeholder(getattr(tf, self.input_data[name][1]), name=f'inputs_p_{name}',
+                                                  shape=(None, *self.input_data[name][0]))
+                             for name in self.input_data}
             self.is_training = tf.placeholder_with_default(False, [], name='is_training')
 
             # need a list instead of a dict
