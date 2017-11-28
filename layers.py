@@ -73,7 +73,7 @@ class _Layer(object):
 
 
 class ConvLayer(_Layer):
-    def __init__(self, n_filters:int, kernel_size:_OneOrMore(int), strides: int=1,
+    def __init__(self, n_filters: int, kernel_size: _OneOrMore(int), strides: int=1,
                  activation: str='relu', padding: str='same', batch_norm: str='before'):
         super().__init__()
         self.params.update(dict(
@@ -401,3 +401,19 @@ class CustomLayer(_Layer):
             self.params.update(params)
         self.layer = layer_func
         self.batch_norm = batch_norm
+
+
+class EmbeddingLayer(_Layer):
+
+    def __init__(self, vocab_size: int, embedding_size: int, embeddings_name: str='embeddings'):
+        super().__init__()
+        self.params.update({'name': embeddings_name, 'shape': [vocab_size, embedding_size]})
+
+    def apply(self, inputs: tf.Tensor, is_training: tf.Tensor) -> tf.Tensor:
+        """
+        :param inputs:
+        :param is_training: unused
+        :returns:
+        """
+
+        return tf.nn.embedding_lookup(tf.get_variable(**self.params), inputs)
