@@ -299,11 +299,11 @@ class BaseNN(object):
 
         for val_name in train_vals:
             self.train_writer.add_summary(tf.Summary(
-                value=[tf.Summary.Value(tag=val_name, simple_value=train_vals[val_name])]), epoch)
+                value=[tf.Summary.Value(tag=val_name.replace('train_', ''), simple_value=train_vals[val_name])]), epoch)
 
         for val_name in dev_vals:
             self.dev_writer.add_summary(tf.Summary(
-                value=[tf.Summary.Value(tag=val_name, simple_value=dev_vals[val_name])]), epoch)
+                value=[tf.Summary.Value(tag=val_name.replace('dev_', ''), simple_value=dev_vals[val_name])]), epoch)
 
     def _log(self, extras):
         if self.log_to_bson:
