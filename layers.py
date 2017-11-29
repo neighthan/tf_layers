@@ -1,6 +1,6 @@
 import tensorflow as tf
 from computer_vision.scripts.utils import flatten
-from typing import Union, Sequence, Optional, Callable, Dict, Any
+from typing import Union, Sequence, Optional, Callable, Dict, Any, List
 
 _OneOrMore = lambda type_: Union[type_, Sequence[type_]]
 
@@ -38,7 +38,10 @@ class _Layer(object):
     def __init__(self):
         self.params = {}
         self.batch_norm = False
-        self.layer = lambda x, **kwargs: x
+
+    @property
+    def layer(self):
+        return lambda x, **kwargs: x
 
     def apply(self, inputs: tf.Tensor, is_training: tf.Tensor) -> tf.Tensor:
         """
@@ -405,8 +408,12 @@ class CustomLayer(_Layer):
         super().__init__()
         if params is not None:
             self.params.update(params)
-        self.layer = layer_func
         self.batch_norm = batch_norm
+        self.layer_func = layer_func
+
+    @property
+    def layer(self):
+        return self.layer_func
 
 
 class EmbeddingLayer(_Layer):
@@ -425,3 +432,38 @@ class EmbeddingLayer(_Layer):
 
         with tf.variable_scope('', reuse=self.reuse):
             return tf.nn.embedding_lookup(tf.get_variable(**self.params), inputs)
+
+
+def add_implied_layers(layers: List[Union[_Layer, List[_Layer]]]) -> List[_Layer]:
+    """
+    Wraps all nested lists of layers in BranchedLayer and adds MergeLayer(axis=-1) between BranchedLayers and the
+    next Layer if it isn't a MergeLayer.
+
+    As an example, if layers was:
+      [
+        [ConvLayer(32, 3), ConvLayer(32, 5)],
+        FlattenLayer()
+      ]
+    then the output of this function would be
+      [
+        BranchedLayer([ConvLayer(32, 3), ConvLayer(32, 5)]),
+        MergeLayer(axis=-1),
+        FlattenLayer()
+      ]
+    :param layers:
+    :returns:
+    """
+
+    new_layers = []
+    last_layer_was_branch = False
+    for layer in layers:
+        if type(layer) == list:
+            layer = BranchedLayer(layer)
+
+        if last_layer_was_branch and type(layer) != BranchedLayer and type(layer) != MergeLayer:
+            new_layers.append(MergeLayer(axis=-1))
+
+        new_layers.append(layer)
+
+        last_layer_was_branch = (type(layer) == BranchedLayer)
+    return new_layers
