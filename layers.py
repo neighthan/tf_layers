@@ -292,10 +292,9 @@ class DropoutLayer(_Layer):
 class LSTMLayer(_Layer):
     """
     TODO: is batchnorm between LSTM (or recurrent layers in general) a (good) thing? What about just between LSTM and FC?
-    TODO: this layer probably needs some maintenance...
     """
 
-    def __init__(self, n_units: _OneOrMore(int), activation: str='tanh', ret: str='output', last_only: bool=True,
+    def __init__(self, n_units: _OneOrMore(int), activation: str='tanh', ret: str='state', last_only: bool=True,
                  scope: str='lstm'):
         """
 
@@ -316,8 +315,11 @@ class LSTMLayer(_Layer):
     @staticmethod
     def length(sequence):
         """
-        Computes the length of a tensor; for use with a dynamic rnn
+        Computes the length of a tensor of shape (batches x timesteps x features; for use with a dynamic rnn.
+        The length is the number of timesteps that aren't padding. A padding timestep is all 0's. It is assumed that
+        once one timestep is all 0's, all other timesteps will be too.
         """
+
         used = tf.sign(tf.reduce_max(tf.abs(sequence), reduction_indices=2))
         length = tf.reduce_sum(used, reduction_indices=1)
         return tf.cast(length, tf.int32)
@@ -326,7 +328,7 @@ class LSTMLayer(_Layer):
     def get_last_outputs(n_output_features: int, outputs: tf.Tensor, lengths, output_name: Optional[str]=None):
         # from https://github.com/aymericdamien/TensorFlowExamples/blob/master/examples/3_NeuralNetworks/dynamic_rnn.py
         # TensorFlow doesn't support advanced indexing yet; for each sample, this gets its length and gets the
-        # last (real) output
+        # last (non-padding) output
 
         n_seqs = tf.shape(outputs)[0]
         max_seq_len = tf.shape(outputs)[1]
@@ -342,27 +344,22 @@ class LSTMLayer(_Layer):
         params['initializer'] = params['initializer']()
 
         with tf.variable_scope(self.scope):
-            cells = tf.contrib.rnn.MultiRNNCell([tf.contrib.rnn.LSTMCell(n_units, **params) for n_units in self.n_units])
+            cells = tf.nn.rnn_cell.MultiRNNCell([tf.nn.rnn_cell.LSTMCell(n_units, **params) for n_units in self.n_units])
 
             lengths = LSTMLayer.length(inputs)
             output, state = tf.nn.dynamic_rnn(cells, inputs, dtype=tf.float32, sequence_length=lengths)
+            state = state[-1].c  # cell state, not hidden state (which is output) of the last LSTM layer
 
-            if self.last_only:
-                outputs = []
-                if self.ret in ['state', 'both']:
-                    outputs.append(LSTMLayer.get_last_outputs(self.n_units[-1], state, lengths, 'lstm_out'))
+            outputs = []
+            if self.ret in ['state', 'both']:
+                outputs.append(state)
 
-                if self.ret in ['output', 'both']:
+            if self.ret in ['output', 'both']:
+                if self.last_only:
                     outputs.append(LSTMLayer.get_last_outputs(self.n_units[-1], output, lengths, 'lstm_out'))
-
-                return outputs if len(outputs) > 1 else outputs[0]
-            else:
-                if self.ret == 'state':
-                    return state
-                elif self.ret == 'output':
-                    return output
                 else:
-                    return state, output
+                    outputs.append(output)
+            return outputs if len(outputs) > 1 else outputs[0]
 
     def __eq__(self, other):
         return type(other) == LSTMLayer and self.n_units == other.n_units and self.params == other.params \
