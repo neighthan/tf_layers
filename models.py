@@ -63,7 +63,8 @@ class BaseNN(object):
             data_params: Optional[Dict[str, Any]] = None,
             log_to_bson:                     bool = False,
             early_stop_metric_name:           str = 'dev_loss',
-            uses_dataset:                    bool = False
+            uses_dataset:                    bool = False,
+            overwrite_saved:                 bool = False
     ):
         """
 
@@ -93,7 +94,7 @@ class BaseNN(object):
 
         self.config = config
         self.log_dir = f'{models_dir}/{model_name}/'
-        if models_dir and model_name and os.path.isdir(self.log_dir):  # model exists; reload
+        if models_dir and model_name and os.path.isdir(self.log_dir) and not overwrite_saved:  # model exists; reload
             print(f"Loading graph from: {self.log_dir}.")
             self._load()
         else:
@@ -566,6 +567,7 @@ class CNN(BaseNN):
             random_state:                     int = 521,
             data_params: Optional[Dict[str, Any]] = None,
             log_to_bson:                     bool = False,
+            overwrite_saved:                 bool = False,
             # begin class specific parameters
             l2_lambda: Optional[float] = None,
             learning_rate:       float = 0.001,
@@ -575,10 +577,10 @@ class CNN(BaseNN):
             decay_learning_rate:  bool = False,
             combined_train_op:    bool = True
     ):
-        load_model = models_dir and model_name and os.path.isdir(f'{models_dir}/{model_name}/')
+        load_model = models_dir and model_name and os.path.isdir(f'{models_dir}/{model_name}/') and not overwrite_saved
         super().__init__(input_data, layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
                          batch_size, record, random_state, data_params, log_to_bson, early_stop_metric_name='acc_default',
-                         uses_dataset=False)
+                         uses_dataset=False, overwrite_saved=overwrite_saved)
 
         if not load_model:
             self.l2_lambda = l2_lambda
