@@ -13,9 +13,10 @@ from ast import literal_eval
 from tempfile import TemporaryDirectory
 import shutil
 from typing import List, Optional, Dict, Any, Union, Sequence, Callable
-from computer_vision.scripts.utils import tf_init, get_next_run_num, get_abs_path, acc_at_k
-from computer_vision.scripts.layers import ConvLayer, MaxPoolLayer, AvgPoolLayer, BranchedLayer, MergeLayer, LayerModule,\
+from computer_vision.scripts.utils import get_abs_path, acc_at_k
+from tf_layers.layers import ConvLayer, MaxPoolLayer, AvgPoolLayer, BranchedLayer, MergeLayer, LayerModule,\
     FlattenLayer, DenseLayer, DropoutLayer, GlobalAvgPoolLayer, GlobalMaxPoolLayer, LSTMLayer, _Layer
+from tf_layers.tf_utils import tf_init
 import warnings
 
 _numeric = Union[int, float]
@@ -244,11 +245,11 @@ class BaseNN(object):
         :param dataset: whether the model uses the tensorflow Dataset class. If so, self.data_init_op will be run with
                         inputs, labels fed in. Otherwise, batches of inputs, labels will be fed in separately each time
                         the tensors are run. Either way, is_training will be fed in at each batch.
-        :param generator: a generator that should return the inputs (and possibly labels) to feed in.
-                          If a tuple is returned, it must be (inputs, labels). Otherwise, it is assumed that only inputs
-                          have been given. inputs, labels should each be either a numpy array or a dictionary mapping
-                          task names to numpy arrays. If they aren't a dictionary, they'll be converted like
-                          {'default': inputs}
+        :param generator: a function that, when called, returns a generator that returns the inputs (and possibly labels)
+                          to feed in during training. If a tuple is returned from the generator, it must be
+                          (inputs, labels). Otherwise, it is assumed that only inputs have been given. inputs, labels
+                          should each be either a numpy array or a dictionary mapping task names to numpy arrays. If
+                          they aren't a dictionary, they'll be converted like {'default': inputs}
         :returns:
         """
 
@@ -265,6 +266,7 @@ class BaseNN(object):
                 range_ = range(int(np.ceil(len(idx) / self.batch_size)))
         else:
             assert generator is not None, "generator must be given if inputs is None"
+            generator = generator()
 
         try:
             self.sess.run(self.local_init)
@@ -473,13 +475,13 @@ class BaseNN(object):
             self.sess.run(self.local_init)
             batches = batch_range(n_train_batches_per_epoch)
             ret = self._batch([self.loss_op, self.train_op], train_inputs, train_labels, batches, train_idx,
-                              is_training=True, dataset=self.uses_dataset, generator=train_generator())
+                              is_training=True, dataset=self.uses_dataset, generator=train_generator)
             train_loss = np.array(ret)[0, :].mean()
 
             self.sess.run(self.local_init)
             batches = batch_range(n_dev_batches_per_epoch)
             ret = self._batch(metric_ops, dev_inputs, dev_labels, batches, dev_idx, dataset=self.uses_dataset,
-                              generator=dev_generator())
+                              generator=dev_generator)
             ret = np.array(ret)
 
             dev_loss = ret[-1, :].mean()
