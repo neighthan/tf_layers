@@ -48,7 +48,7 @@ class BaseNN(object):
     layers, so it shouldn't be used directly.
     """
 
-    _param_names = ['input_data', 'layers', 'n_classes', 'n_regress_tasks', 'task_names', 'model_name', 'random_state',
+    _param_names = ['input_spec', 'layers', 'n_classes', 'n_regress_tasks', 'task_names', 'model_name', 'random_state',
                     'batch_size', 'data_params', 'early_stop_metric_name', 'uses_dataset']
     _tensor_attributes = ['loss_op', 'train_op', 'is_training']
     _collection_names = ['inputs_p', 'labels_p', 'predict', 'metrics']
