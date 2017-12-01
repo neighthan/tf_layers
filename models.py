@@ -36,6 +36,12 @@ _activations = {
 }
 
 
+def get_inputs_from_spec(input_spec: Dict[str, tuple]) -> Dict[str, tf.Tensor]:
+    return {name: tf.placeholder(getattr(tf, input_spec[name][1]), name=f'inputs_p_{name}',
+                                 shape=(None, *input_spec[name][0]))
+            for name in input_spec}
+
+
 class BaseNN(object):
     """
     This class implements several methods that may be used by neural networks in general. It doesn't actually create any
@@ -49,7 +55,7 @@ class BaseNN(object):
 
     def __init__(
             self,
-            input_data: Optional[Union[tuple, Dict[str, tuple]]] = None,
+            input_spec: Optional[Union[tuple, Dict[str, tuple]]] = None,
             layers:        Optional[List[_Layer]] = None,
             models_dir:                       str = '',
             n_regress_tasks:                  int = 0,
@@ -68,7 +74,7 @@ class BaseNN(object):
     ):
         """
 
-        :param input_data: one tuple per input that has (shape, dtype) where dtype is stored as a string.
+        :param input_spec: one tuple per input that has (shape, dtype) where dtype is stored as a string.
                            Ex: ((32, 32, 3), 'float32') for 32x32 images with 3 channels stored as floats. Note that
                            all inputs will have a None dimension prepended to their shape to allow variable-length
                            batches. The batch dimension thus should not be included in the given shapes.
@@ -112,7 +118,7 @@ class BaseNN(object):
 
             assert type(layers) is not None
             assert n_regress_tasks > 0 or len(n_classes) > 0
-            self.input_data = input_data if type(input_data) == dict else {'default': input_data}
+            self.input_spec = input_spec if type(input_spec) == dict else {'default': input_spec}
             self.model_name = model_name
             self.layers = layers
             self.n_regress_tasks = n_regress_tasks
@@ -554,7 +560,7 @@ class CNN(BaseNN):
 
     def __init__(
             self,
-            input_data: Optional[Union[tuple, Dict[str, tuple]]] = None,
+            input_spec: Optional[Union[tuple, Dict[str, tuple]]] = None,
             layers:        Optional[List[_Layer]] = None,
             models_dir:                       str = '',
             n_regress_tasks:                  int = 0,
@@ -578,7 +584,7 @@ class CNN(BaseNN):
             combined_train_op:    bool = True
     ):
         load_model = models_dir and model_name and os.path.isdir(f'{models_dir}/{model_name}/') and not overwrite_saved
-        super().__init__(input_data, layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
+        super().__init__(input_spec, layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
                          batch_size, record, random_state, data_params, log_to_bson, early_stop_metric_name='acc_default',
                          uses_dataset=False, overwrite_saved=overwrite_saved)
 
@@ -612,9 +618,7 @@ class CNN(BaseNN):
         with self.graph.as_default():
             # dtype is stored as a string so that it can easily be saved/reloaded with the model. Because of this, we
             # have to get the tf dtype associated with that string name
-            self.inputs_p = {name: tf.placeholder(getattr(tf, self.input_data[name][1]), name=f'inputs_p_{name}',
-                                                  shape=(None, *self.input_data[name][0]))
-                             for name in self.input_data}
+            self.inputs_p = get_inputs_from_spec(self.input_spec)
             self.is_training = tf.placeholder_with_default(False, [], name='is_training')
 
             # need a list instead of a dict
