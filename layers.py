@@ -155,13 +155,20 @@ class BranchedLayer(_Layer):
     input given to be returned as the output as well.
     """
 
-    def __init__(self, layers: Sequence[_Layer]):
+    def __init__(self, layers: Sequence[_Layer], layer_input_map: Optional[Dict[int, Sequence[int]]]=None):
         """
-        :param List[_Layer] layers:
+        :param layers:
+        :param layer_input_map: which input tensors should be passed as inputs to which layers. By default, layer `i`
+                                will get the `i`'th input. This can be useful, e.g., if you want to merge some but not
+                                all layers in a series of BranchedLayers.
+                                Ex:
+                                {0: [0, 1], 1: [2], 3: [4, 5]} means that you expect 5 inputs but only have three layers
+                                at this level. The 0'th one takes the first two inputs, and so on.
         """
 
         super().__init__()
         self.layers = layers
+        self.layer_input_map = layer_input_map if layer_input_map is not None else {i: [i] for i in range(len(layers))}
 
     def apply(self, inputs: _OneOrMore(tf.Tensor), is_training: tf.Tensor) -> Sequence[tf.Tensor]:
         """
@@ -174,14 +181,21 @@ class BranchedLayer(_Layer):
         if type(inputs) is not list:
             inputs = [inputs] * len(self.layers)
         else:
-            assert len(inputs) == len(self.layers)
+            assert len(inputs) == len([input_idx for layer_inputs in self.layer_input_map.values() for input_idx in layer_inputs])
 
         outputs = []
-        for i in range(len(inputs)):
-            if self.layers[i] is not None:
-                outputs.append(self.layers[i].apply(inputs[i], is_training))
+        for i, layer in enumerate(self.layers):
+            layer_inputs = [inputs[j] for j in self.layer_input_map[i]]
+            if len(layer_inputs) == 1:
+                layer_inputs = layer_inputs[0]
+
+            if layer is not None:
+                outputs.append(layer.apply(layer_inputs, is_training))
             else:
-                outputs.append(inputs[i])
+                if type(layer_inputs) == list:
+                    outputs.extend(layer_inputs)
+                else:
+                    outputs.append(layer_inputs)
         return outputs
 
     def __eq__(self, other):
@@ -415,9 +429,9 @@ class CustomLayer(_Layer):
 
 class EmbeddingLayer(_Layer):
 
-    def __init__(self, vocab_size: int, embedding_size: int, reuse: bool=False, embeddings_name: str='embeddings'):
+    def __init__(self, vocab_size: int, embedding_size: int, reuse: bool=False, name: str='embeddings'):
         super().__init__()
-        self.params.update({'name': embeddings_name, 'shape': [vocab_size, embedding_size]})
+        self.params.update({'name': name, 'shape': [vocab_size, embedding_size]})
         self.reuse = tf.AUTO_REUSE if reuse else False
 
     def apply(self, inputs: tf.Tensor, is_training: tf.Tensor) -> tf.Tensor:
