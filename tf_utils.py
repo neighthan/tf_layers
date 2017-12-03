@@ -1,4 +1,5 @@
 import tensorflow as tf
+import numpy as np
 import os
 from gpu_dashboard.gpu_utils import get_best_gpu
 from typing import Sequence, Optional, Tuple, Any
@@ -42,3 +43,7 @@ def load_model(model_dir: str, tags: Optional[Sequence[str]]=(tf.saved_model.tag
     sess = sess if sess is not None else tf.Session(config=config)
     graph_def = tf.saved_model.loader.load(sess, tags, model_dir)
     return sess, graph_def
+
+
+def n_model_parameters(graph: tf.Graph) -> int:
+    return np.sum([np.product(var.shape.as_list()) for var in graph.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)])
