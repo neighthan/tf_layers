@@ -16,7 +16,7 @@ from typing import List, Optional, Dict, Any, Union, Sequence, Callable
 from computer_vision.scripts.utils import get_abs_path, acc_at_k
 from tf_layers.layers import ConvLayer, MaxPoolLayer, AvgPoolLayer, BranchedLayer, MergeLayer, LayerModule,\
     FlattenLayer, DenseLayer, DropoutLayer, GlobalAvgPoolLayer, GlobalMaxPoolLayer, LSTMLayer, _Layer
-from tf_layers.tf_utils import tf_init
+from tf_layers.tf_utils import tf_init, n_model_parameters
 import warnings
 
 _numeric = Union[int, float]
@@ -473,54 +473,58 @@ class BaseNN(object):
 
         metric_names = list(self.metrics.keys())
         metric_ops = [self.metrics[name] for name in metric_names] + [self.loss_op]
+        best_metrics = {}
 
         epochs = epoch_range(n_epochs)
-        for epoch in epochs:
-            if train_idx:
-                np.random.shuffle(train_idx)
+        try:
+            for epoch in epochs:
+                if train_idx:
+                    np.random.shuffle(train_idx)
 
-            self.sess.run(self.local_init)
-            batches = batch_range(n_train_batches_per_epoch)
-            ret = self._batch([self.loss_op, self.train_op], train_inputs, train_labels, batches, train_idx,
-                              is_training=True, dataset=self.uses_dataset, generator=train_generator)
-            train_loss = np.array(ret)[0, :].mean()
+                self.sess.run(self.local_init)
+                batches = batch_range(n_train_batches_per_epoch)
+                ret = self._batch([self.loss_op, self.train_op], train_inputs, train_labels, batches, train_idx,
+                                  is_training=True, dataset=self.uses_dataset, generator=train_generator)
+                train_loss = np.array(ret)[0, :].mean()
 
-            self.sess.run(self.local_init)
-            batches = batch_range(n_dev_batches_per_epoch)
-            ret = self._batch(metric_ops, dev_inputs, dev_labels, batches, dev_idx, dataset=self.uses_dataset,
-                              generator=dev_generator)
-            ret = np.array(ret)
+                self.sess.run(self.local_init)
+                batches = batch_range(n_dev_batches_per_epoch)
+                ret = self._batch(metric_ops, dev_inputs, dev_labels, batches, dev_idx, dataset=self.uses_dataset,
+                                  generator=dev_generator)
+                ret = np.array(ret)
 
-            dev_loss = ret[-1, :].mean()
-            dev_metrics = ret[:-1, -1]  # last values, because metrics are streaming
-            dev_metrics = {metric_names[i]: dev_metrics[i] for i in range(len(metric_names))}
-            dev_metrics.update({'dev_loss': dev_loss})
-            early_stop_metric = dev_metrics[self.early_stop_metric_name]
+                dev_loss = ret[-1, :].mean()
+                dev_metrics = ret[:-1, -1]  # last values, because metrics are streaming
+                dev_metrics = {metric_names[i]: dev_metrics[i] for i in range(len(metric_names))}
+                dev_metrics.update({'dev_loss': dev_loss})
+                early_stop_metric = dev_metrics[self.early_stop_metric_name]
 
-            if self.record:
-                self._add_summaries(epoch, {'loss': train_loss}, dev_metrics)
-
-            if self._metric_improved(best_early_stop_metric, early_stop_metric):  # always keep updating the best model
-                train_time = (time.time() - start_time) / 60  # in minutes
-                best_metrics = dev_metrics
-                best_metrics.update({'train_loss': train_loss, 'train_time': train_time, 'train_complete': False})
                 if self.record:
-                    self._log(best_metrics)
-                    self._save()
+                    self._add_summaries(epoch, {'loss': train_loss}, dev_metrics)
 
-            if self._metric_improved(best_early_stop_metric, early_stop_metric, significant=True):
-                best_early_stop_metric = early_stop_metric
-                patience = max_patience
-            else:
-                patience -= 1
-                if patience == 0:
-                    break
+                if self._metric_improved(best_early_stop_metric, early_stop_metric):  # always keep updating the best model
+                    train_time = (time.time() - start_time) / 60  # in minutes
+                    best_metrics = dev_metrics
+                    best_metrics.update({'train_loss': train_loss, 'train_time': train_time, 'train_complete': False})
+                    if self.record:
+                        self._log(best_metrics)
+                        self._save()
 
-            runtime = (time.time() - start_time) / 60
-            if verbose == 1:
-                print(f"Train loss: {train_loss:.3f}; Dev loss: {dev_loss:.3f}. Metrics: {dev_metrics}. Time: {runtime}")
-            elif verbose > 1:
-                epochs.set_description(f"Epoch {epoch + 1}. Train Loss: {train_loss:.3f}. Dev loss: {dev_loss:.3f}. Runtime {runtime:.2f}.")
+                if self._metric_improved(best_early_stop_metric, early_stop_metric, significant=True):
+                    best_early_stop_metric = early_stop_metric
+                    patience = max_patience
+                else:
+                    patience -= 1
+                    if patience == 0:
+                        break
+
+                runtime = (time.time() - start_time) / 60
+                if verbose == 1:
+                    print(f"Train loss: {train_loss:.3f}; Dev loss: {dev_loss:.3f}. Metrics: {dev_metrics}. Time: {runtime}")
+                elif verbose > 1:
+                    epochs.set_description(f"Epoch {epoch + 1}. Train Loss: {train_loss:.3f}. Dev loss: {dev_loss:.3f}. Runtime {runtime:.2f}.")
+        except KeyboardInterrupt:
+            return best_metrics
 
         best_metrics['train_complete'] = True
         if self.record:
@@ -552,11 +556,12 @@ class BaseNN(object):
         raise NotImplemented
 
 
-class CNN(BaseNN):
+class NN(BaseNN):
     """
     """
 
-    _param_names = ['l2_lambda', 'learning_rate', 'beta1', 'beta2', 'add_scaling', 'decay_learning_rate', 'combined_train_op']
+    _param_names = ['l2_lambda', 'learning_rate', 'beta1', 'beta2', 'add_scaling', 'decay_learning_rate', 'combined_train_op',
+                    'modified_l2']
 
     def __init__(
             self,
@@ -581,7 +586,8 @@ class CNN(BaseNN):
             beta2:               float = 0.999,
             add_scaling:          bool = False,
             decay_learning_rate:  bool = False,
-            combined_train_op:    bool = True
+            combined_train_op:    bool = True,
+            modified_l2:          bool = False
     ):
         load_model = models_dir and model_name and os.path.isdir(f'{models_dir}/{model_name}/') and not overwrite_saved
         super().__init__(input_spec, layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
@@ -596,8 +602,9 @@ class CNN(BaseNN):
             self.add_scaling = add_scaling
             self.decay_learning_rate = decay_learning_rate
             self.combined_train_op = combined_train_op
+            self.modified_l2 = modified_l2
 
-        self.params.update({param: self.__getattribute__(param) for param in CNN._param_names})
+        self.params.update({param: self.__getattribute__(param) for param in NN._param_names})
 
         if not load_model:
             self._build_graph()
@@ -666,6 +673,7 @@ class CNN(BaseNN):
 
             self.global_step = tf.Variable(0, trainable=False, name='global_step')
 
+            self.learning_rate = tf.Variable(self.learning_rate, trainable=False)
             if self.decay_learning_rate:
                 decayed_lr = tf.train.exponential_decay(self.learning_rate, self.global_step,
                                                              decay_steps=200000 // self.batch_size, decay_rate=0.94)
@@ -677,8 +685,10 @@ class CNN(BaseNN):
 
             if self.combined_train_op:
                 if self.l2_lambda:
-                    self.loss_op = tf.add(tf.add_n(list(self.loss_ops.values())), self.l2_lambda * tf.reduce_sum(
-                        [tf.nn.l2_loss(var) for var in tf.trainable_variables()]), name='loss_op')
+                    l2_loss = tf.reduce_sum([tf.nn.l2_loss(var) for var in tf.trainable_variables()])
+                    if self.modified_l2:
+                        l2_loss /= n_model_parameters(self.graph)
+                    self.loss_op = tf.add(tf.add_n(list(self.loss_ops.values())), self.l2_lambda * l2_loss, name='loss_op')
                 else:
                     self.loss_op = tf.add_n(list(self.loss_ops.values()), name='loss_op')
 
@@ -701,7 +711,7 @@ class CNN(BaseNN):
     def _check_graph(self):
         super()._check_graph()
 
-        for attr in CNN._param_names:
+        for attr in NN._param_names:
             try:
                 getattr(self, attr)
             except AttributeError:
@@ -1176,181 +1186,3 @@ class RLCNN(BaseNN):
 
     def score(self, *args):
         raise NotImplemented
-
-
-class RNN(BaseNN):
-    """
-    """
-
-    def __init__(
-        self,
-        layers:         Optional[List[_Layer]] = None,
-        models_dir:                        str = '',
-        log_key:                           str = 'default',
-        n_regress_tasks:                   int = 0,
-        n_classes:             _OneOrMore(int) = (),
-        task_names:    Optional[Sequence[str]] = None,
-        config:       Optional[tf.ConfigProto] = None,
-        run_num:                           int = -1,
-        batch_size:                        int = 256,
-        record:                           bool = True,
-        random_state:                      int = 1,
-        data_params:  Optional[Dict[str, Any]] = None,
-        # begin class specific parameters
-        n_timesteps:                       int = -1,
-        n_features: Union[int, Dict[str, int]] = None,
-        l2_lambda:             Optional[float] = None,
-        learning_rate:                   float = 0.001,
-        beta1:                           float = 0.9,
-        beta2:                           float = 0.999,
-        decay_learning_rate:              bool = False
-    ):
-
-        assert n_regress_tasks == 0 and (type(n_classes) == int or len(n_classes) <= 1), "Only single-task classification RNN is supported now"
-
-        new_run = run_num == -1
-        super().__init__(layers, models_dir, log_key, n_regress_tasks, n_classes, task_names, config, run_num,
-                         batch_size, record, random_state, data_params)
-
-        param_names = ['n_timesteps', 'n_features', 'l2_lambda', 'learning_rate', 'beta1', 'beta2', 'decay_learning_rate']
-
-        self.log_fname = f"{models_dir}/log.h5"
-
-        if type(n_features) == int:
-            n_features = {'default': n_features}
-
-        if new_run:
-            assert n_timesteps != -1
-            assert type(n_features) == dict
-            self.n_timesteps         = n_timesteps
-            self.n_features          = n_features
-            self.l2_lambda           = l2_lambda
-            self.learning_rate       = learning_rate
-            self.beta1               = beta1
-            self.beta2               = beta2
-            self.decay_learning_rate = decay_learning_rate
-        else:
-            self.run_num = run_num
-            log = pd.read_hdf(self.log_fname, log_key)
-            for param in param_names:
-                p = log.loc[run_num, param]
-                self.__setattr__(param, p if type(p) != np.float64 else p.astype(np.float32))
-
-        self.params.update({param: self.__getattribute__(param) for param in param_names})
-
-        self._build_graph()
-
-    def _batches_per_epoch(self, data) -> int:
-        if type(data) == dict:  # for GroupedLSTM
-            n_batches = int(np.ceil(len(next(iter(data.values()))) / self.batch_size))
-        else:
-            n_batches = int(np.ceil(len(data) / self.batch_size))
-        return n_batches
-
-    def _build_graph(self) -> None:
-        """
-        If self.log_dir contains a previously trained model, then the graph from that run is loaded for further
-        training/inference. Otherwise, a new graph is built.
-        Also starts a session with self.graph.
-        If self.log_dir != '' then a Saver and summary writers are also created.
-        """
-
-        self.graph = tf.Graph()
-        with self.graph.as_default():
-            group_names = list(self.n_features.keys())
-            self.inputs_p = {name: tf.placeholder(tf.float32, shape=(None, self.n_timesteps, self.n_features[name]),
-                                                  name=f'inputs_p_{name}') for name in group_names}
-            # TODO: repeat labels across n_timesteps instead of taking them in as that shape
-            self.labels_p = {'default': tf.placeholder(tf.int32, shape=(None, 1), name='labels_p')}
-            self.is_training = tf.placeholder_with_default(False, [])
-
-            labels = tf.tile(self.labels_p['default'], [1, self.n_timesteps])
-            data = tf.contrib.data.Dataset.from_tensor_slices(([self.inputs_p[name] for name in group_names], labels))
-            self.data = data.batch(self.batch_size)
-
-            iterator = tf.contrib.data.Iterator.from_structure(self.data.output_types, self.data.output_shapes)
-            self.data_init_op = iterator.make_initializer(self.data)
-
-            self.inputs, self.labels = iterator.get_next()
-
-            hidden = self.inputs
-
-            for layer in self.layers:
-                hidden = layer.apply(hidden, is_training=self.is_training)
-
-            self.logits = tf.layers.dense(hidden, self.n_classes[0], activation=None, name='logits')
-            self.predict = tf.nn.softmax(self.logits, name='predict')
-            # TODO: do we need all of the features to tell the length? If so, that will be an issue inside of the
-            # separate LSTM modules. We should check this on the actual data and, if needed, find a better way to
-            # tell length (e.g. some sentinel value that marks the end if 0 doesn't work for that)
-            mask = tf.cast(tf.sequence_mask(LSTMLayer.length(self.inputs[0]), self.n_timesteps), tf.float32)
-            self.loss_op = tf.contrib.seq2seq.sequence_loss(self.logits, self.labels, mask)
-
-            # self.predict = tf.nn.sigmoid(self.logits, name='predict')
-            # auc_val, self.auc_op = tf.contrib.metrics.streaming_auc(self.predict[:, 1], self.labels, name='auc_op')
-            # self.loss_op = tf.losses.sparse_softmax_cross_entropy(self.labels, self.logits, scope='xent')
-
-            if self.l2_lambda:
-                self.loss_op = tf.add(self.loss_op, self.l2_lambda * tf.reduce_sum([tf.nn.l2_loss(var) for var in tf.trainable_variables()]), name='loss')
-
-            # TODO: get these in use (so we can store epochs + time when reloading for further training)
-            # self.epoch = tf.Variable(0, name='epoch', trainable=False)
-            # self.train_time = tf.Variable(0, name='train_time', trainable=False)
-            if self.decay_learning_rate:
-                self.global_step = tf.Variable(0, name='global_step', trainable=False) # should be loaded like self.epoch
-                self.decayed_lr = tf.train.exponential_decay(self.learning_rate, self.global_step,
-                                                             decay_steps=30000 // self.batch_size, decay_rate=0.9)
-                self.optimizer = tf.train.RMSPropOptimizer(self.decayed_lr)
-                self.train_op = self.optimizer.minimize(self.loss_op, global_step=self.global_step, name='train_op')
-            else:
-                self.train_op = tf.train.AdamOptimizer(self.learning_rate, self.beta1, self.beta2).minimize(self.loss_op, name='train_op')
-
-            self.metrics = {}
-            self.early_stop_metric_name = 'dev_loss'
-            self.uses_dataset = True
-
-            self.global_init = tf.global_variables_initializer()
-            self.local_init = tf.local_variables_initializer()
-
-        self._add_savers_and_writers()
-        self._check_graph()
-
-    def predict_proba(self, inputs, labels, final_only=False) -> Union[Dict[str, pd.DataFrame], pd.DataFrame]:
-        """
-        Generates predictions (predicted 'probabilities', not binary labels) on the test set
-        :param labels: these are also needed because the data iterator feeds in batches of inputs and labels.
-                       Having the labels also lets us put the same index on the predictions.
-        :returns: array of predicted probabilities of being positive for each sample in the test set
-        """
-
-        if final_only:
-            assert False, "Need to implement this"
-
-        if self.n_classes[0] > 2:
-            assert False, "Only implemented for 2 classes so far. Otherwise, output is 3D (patients x timesteps x classes)"
-
-        if type(inputs) is not dict:
-            inputs = {'default': inputs}
-        if type(labels) is not dict:
-            labels = {'default': labels}
-
-        self.sess.run(self.data_init_op, self._get_feed_dict(inputs, labels))
-
-        # predictions = []
-        # for _ in range(self._batches_per_epoch(inputs)):
-        #     predictions.append(self.sess.run(self.predict)[:, :, 1])
-        # predictions = np.concatenate(predictions)
-
-        predictions = self._batch(self.predict, inputs, labels, dataset=self.uses_dataset)
-        predictions = pd.DataFrame(np.concatenate(predictions[0])[:, :, 1], index=labels['default'].index)
-
-        return predictions
-
-    def score(self, inputs, labels, metric='auc'):
-        if metric != 'auc':
-            assert False, 'Only AUC supported so far'
-
-        self.sess.run([self.data_init_op, self.local_init], self._get_feed_dict(inputs, labels))
-        for _ in range(int(np.ceil(len(inputs) / self.batch_size))):
-            auc = self.sess.run(self.auc_op)
-        return auc
