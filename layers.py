@@ -58,17 +58,17 @@ class _Layer(object):
 
     def _apply_with_batch_norm(self, inputs: tf.Tensor, params: dict, is_training: tf.Tensor) -> tf.Tensor:
         if self.batch_norm == 'before':
-            output = tf.layers.batch_normalization(inputs, training=is_training)
+            output = tf.layers.batch_normalization(inputs, training=is_training, fused=True)
             output = self.layer(output, **params)
         elif self.batch_norm == 'after':
             if 'activation' in params:
                 activation = params.pop('activation')
                 output = self.layer(inputs, activation=None, **params)
-                output = tf.layers.batch_normalization(output, training=is_training)
+                output = tf.layers.batch_normalization(output, training=is_training, fused=True)
                 output = activation(output)
             else:
                 output = self.layer(inputs, **params)
-                output = tf.layers.batch_normalization(output, training=is_training)
+                output = tf.layers.batch_normalization(output, training=is_training, fused=True)
         else:
             output = self.layer(inputs, **params)
         return output
@@ -180,8 +180,6 @@ class BranchedLayer(_Layer):
 
         if type(inputs) is not list:
             inputs = [inputs] * len(self.layers)
-        else:
-            assert len(inputs) == len([input_idx for layer_inputs in self.layer_input_map.values() for input_idx in layer_inputs])
 
         outputs = []
         for i, layer in enumerate(self.layers):
