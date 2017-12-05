@@ -50,7 +50,7 @@ class BaseNN(object):
 
     _param_names = ['input_spec', 'layers', 'n_classes', 'n_regress_tasks', 'task_names', 'model_name', 'random_state',
                     'batch_size', 'data_params', 'early_stop_metric_name', 'uses_dataset']
-    _tensor_attributes = ['loss_op', 'train_op', 'is_training']
+    _tensor_attributes = ['loss_op', 'train_op', 'is_training', 'learning_rate']
     _collection_names = ['inputs_p', 'labels_p', 'predict', 'metrics']
 
     def __init__(
@@ -483,9 +483,13 @@ class BaseNN(object):
 
                 self.sess.run(self.local_init)
                 batches = batch_range(n_train_batches_per_epoch)
-                ret = self._batch([self.loss_op, self.train_op], train_inputs, train_labels, batches, train_idx,
+                ret = self._batch(metric_ops + [self.loss_op, self.train_op], train_inputs, train_labels, batches, train_idx,
                                   is_training=True, dataset=self.uses_dataset, generator=train_generator)
-                train_loss = np.array(ret)[0, :].mean()
+                ret = np.array(ret)
+                train_loss = ret[-2, :].mean()
+                train_metrics = ret[:-2, -1]  # last values, because metrics are streaming
+                train_metrics = {metric_names[i]: train_metrics[i] for i in range(len(metric_names))}
+                train_metrics.update({'train_loss': train_loss})
 
                 self.sess.run(self.local_init)
                 batches = batch_range(n_dev_batches_per_epoch)
@@ -494,13 +498,13 @@ class BaseNN(object):
                 ret = np.array(ret)
 
                 dev_loss = ret[-1, :].mean()
-                dev_metrics = ret[:-1, -1]  # last values, because metrics are streaming
+                dev_metrics = ret[:-1, -1]
                 dev_metrics = {metric_names[i]: dev_metrics[i] for i in range(len(metric_names))}
                 dev_metrics.update({'dev_loss': dev_loss})
                 early_stop_metric = dev_metrics[self.early_stop_metric_name]
 
                 if self.record:
-                    self._add_summaries(epoch, {'loss': train_loss}, dev_metrics)
+                    self._add_summaries(epoch, train_metrics, dev_metrics)
 
                 if self._metric_improved(best_early_stop_metric, early_stop_metric):  # always keep updating the best model
                     train_time = (time.time() - start_time) / 60  # in minutes
@@ -560,7 +564,7 @@ class NN(BaseNN):
     """
     """
 
-    _param_names = ['l2_lambda', 'learning_rate', 'beta1', 'beta2', 'add_scaling', 'decay_learning_rate', 'combined_train_op',
+    _param_names = ['l2_lambda', 'beta1', 'beta2', 'add_scaling', 'decay_learning_rate', 'combined_train_op',
                     'modified_l2']
 
     def __init__(
@@ -673,7 +677,7 @@ class NN(BaseNN):
 
             self.global_step = tf.Variable(0, trainable=False, name='global_step')
 
-            self.learning_rate = tf.Variable(self.learning_rate, trainable=False)
+            self.learning_rate = tf.Variable(self.learning_rate, trainable=False, name='learning_rate')
             if self.decay_learning_rate:
                 decayed_lr = tf.train.exponential_decay(self.learning_rate, self.global_step,
                                                              decay_steps=200000 // self.batch_size, decay_rate=0.94)
