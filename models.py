@@ -50,8 +50,8 @@ class BaseNN(object):
 
     _param_names = ['input_spec', 'layers', 'n_classes', 'n_regress_tasks', 'task_names', 'model_name', 'random_state',
                     'batch_size', 'data_params', 'early_stop_metric_name', 'uses_dataset']
-    _tensor_attributes = ['loss_op', 'train_op', 'is_training', 'learning_rate']
-    _collection_names = ['inputs_p', 'labels_p', 'predict', 'metrics']
+    _tensor_attributes = ['loss_op', 'train_op', 'is_training', 'learning_rate', 'best_early_stop_metric', 'epoch']
+    _collection_names = ['inputs_p', 'labels_p', 'predict', 'metrics', 'tensor_updates']
 
     def __init__(
             self,
@@ -107,7 +107,7 @@ class BaseNN(object):
                 for summary_dir in ['train', 'dev']:
                     try:
                         dir_name = f"{self.log_dir}/{summary_dir}"
-                        for file in [f"{dir_name}/{fname}" for fname in os.listdir(dir_name)]:
+                        for file in [f"{dir_name}/{fname}" for fname in os.listdir(dir_name) if fname.startswith('events')]:
                             os.remove(file)
                     except FileNotFoundError:  # if one of the summary dirs doesn't exist
                         continue
@@ -178,6 +178,7 @@ class BaseNN(object):
         raise NotImplemented
 
     def _add_savers_and_writers(self):
+        # add a few misc things too
         with self.graph.as_default():
             self.local_init = tf.local_variables_initializer()
 
@@ -189,6 +190,16 @@ class BaseNN(object):
             self.sess = tf.Session(graph=self.graph, config=self.config)
 
             with self.graph.as_default():
+                # if higher is better, start low; otherwise, vice versa
+                init_metric_val = -np.inf if self._metric_improved(0, 1) else np.inf
+                self.best_early_stop_metric = tf.Variable(init_metric_val, trainable=False, name='best_early_stop_metric')
+
+                self.epoch = tf.Variable(0., trainable=False, name='epoch')
+
+                update_val = tf.placeholder(tf.float32, name='update_val')
+                self.tensor_updates = {tensor.name[:-2]: tf.assign(tensor, update_val, name=f"update_{tensor.name[:-2]}")
+                                       for tensor in [self.best_early_stop_metric, self.learning_rate, self.epoch]}
+
                 self.sess.run(tf.global_variables_initializer())
 
         if self.record:
@@ -377,7 +388,7 @@ class BaseNN(object):
         # Can't save multiple times in the same directory, so we save to a temporary directory then move the files
         # into the actual log directory
 
-        with TemporaryDirectory() as tmp_dir:
+        with TemporaryDirectory(dir=self.log_dir) as tmp_dir:
             with self.graph.as_default():
                 builder = tf.saved_model.builder.SavedModelBuilder(f"{tmp_dir}/model")
                 builder.add_meta_graph_and_variables(self.sess, [tf.saved_model.tag_constants.TRAINING])
@@ -482,18 +493,15 @@ class BaseNN(object):
             n_train_batches_per_epoch = n_train_batches_per_epoch if n_train_batches_per_epoch is not None else int(1e18)
             n_dev_batches_per_epoch = n_dev_batches_per_epoch if n_dev_batches_per_epoch is not None else int(1e18)
 
-        if self._metric_improved(0, 1):  # higher is better; start low
-            best_early_stop_metric = -np.inf
-        else:
-            best_early_stop_metric = np.inf
-
         patience = max_patience
 
         metric_names = list(self.metrics.keys())
         metric_ops = [self.metrics[name] for name in metric_names] + [self.loss_op]
         best_metrics = {}
+        best_early_stop_metric = self.sess.run(self.best_early_stop_metric)
 
-        epochs = epoch_range(n_epochs)
+        current_epoch = int(self.sess.run(self.epoch))
+        epochs = epoch_range(current_epoch, current_epoch + n_epochs)
         try:
             for epoch in epochs:
                 if train_idx:
@@ -529,6 +537,8 @@ class BaseNN(object):
                     best_metrics = dev_metrics
                     best_metrics.update({'train_loss': train_loss, 'train_time': train_time, 'train_complete': False})
                     if self.record:
+                        self.update_tensor('best_early_stop_metric', early_stop_metric)
+                        self.update_tensor('epoch', epoch)
                         self._log(best_metrics)
                         self._save()
 
@@ -556,6 +566,9 @@ class BaseNN(object):
             self._check_graph()
 
         return best_metrics
+
+    def update_tensor(self, tensor_name: str, updated_value) -> None:
+        self.sess.run(self.tensor_updates[tensor_name], {'update_val:0': updated_value})
 
     def predict_proba(self, inputs: Union[np.ndarray, Dict[str, np.ndarray]]) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
