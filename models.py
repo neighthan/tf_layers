@@ -100,10 +100,22 @@ class BaseNN(object):
 
         self.config = config
         self.log_dir = f'{models_dir}/{model_name}/'
-        if models_dir and model_name and os.path.isdir(self.log_dir) and not overwrite_saved:  # model exists; reload
-            print(f"Loading graph from: {self.log_dir}.")
-            self._load()
-        else:
+
+        model_exists = models_dir and model_name and os.path.isdir(self.log_dir)
+        if model_exists:  # model exists; probably reload
+            if overwrite_saved:
+                for summary_dir in ['train', 'dev']:
+                    try:
+                        dir_name = f"{self.log_dir}/{summary_dir}"
+                        for file in [f"{dir_name}/{fname}" for fname in os.listdir(dir_name)]:
+                            os.remove(file)
+                    except FileNotFoundError:  # if one of the summary dirs doesn't exist
+                        continue
+            else:
+                print(f"Loading graph from: {self.log_dir}.")
+                self._load()
+
+        if not model_exists or overwrite_saved:
             if type(n_classes) == int:
                 n_classes = (n_classes,)
 
