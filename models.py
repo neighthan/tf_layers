@@ -213,6 +213,12 @@ class BaseNN(object):
                     tf.summary.histogram(var.name, var)
                 self.summary_op = tf.summary.merge_all()
 
+                # add params text table summary
+                param_names = list(self.params.keys())
+                param_vals = [str(val) for val in self.params.values()]
+                params_table = tf.summary.text('params_table', tf.convert_to_tensor([param_names, param_vals]))
+                self.train_writer.add_summary(self.sess.run(params_table))
+
     @staticmethod
     def _metric_improved(old_metric: _numeric, new_metric: _numeric, significant: bool = False, threshold: float = .01) -> bool:
         """
