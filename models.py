@@ -303,6 +303,7 @@ class BaseNN(object):
         else:
             assert generator is not None, "generator must be given if inputs is None"
             generator = generator()
+            range_ = range_ if range_ is not None else range(int(1e18))  # loop until generator runs out
 
         try:
             self.sess.run(self.local_init)
@@ -570,16 +571,17 @@ class BaseNN(object):
     def update_tensor(self, tensor_name: str, updated_value) -> None:
         self.sess.run(self.tensor_updates[tensor_name], {'update_val:0': updated_value})
 
-    def predict_proba(self, inputs: Union[np.ndarray, Dict[str, np.ndarray]]) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+    def predict_proba(self, inputs: Optional[Union[np.ndarray, Dict[str, np.ndarray]]]=None, generator_func: Optional[Callable]=None)\
+            -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
         """
         Generates predictions (predicted 'probabilities', not binary labels)
         :returns: array of predicted probabilities of being positive for each sample in the test set
         """
 
-        if type(inputs) is not dict:
+        if inputs is not None and type(inputs) is not dict:
             inputs = {'default': inputs}
 
-        predictions = self._batch([self.predict[name] for name in self.task_names], inputs, dataset=self.uses_dataset)
+        predictions = self._batch([self.predict[name] for name in self.task_names], inputs, dataset=self.uses_dataset, generator=generator_func)
         predictions = {name: pd.DataFrame(np.concatenate(predictions[i])) for i, name in enumerate(self.task_names)}
 
         if len(predictions.keys()) == 1 and next(iter(predictions)) == 'default':
