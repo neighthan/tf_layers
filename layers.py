@@ -307,7 +307,7 @@ class LSTMLayer(_Layer):
     """
 
     def __init__(self, n_units: _OneOrMore(int), activation: str='tanh', ret: str='state', last_only: bool=True,
-                 scope: str='lstm'):
+                 scope: str='lstm', bidirectional: bool=False):
         """
 
         :param ret: what to return from the LSTM layer: "state", "output", or "both" (as a two tensor tuple)
@@ -323,6 +323,7 @@ class LSTMLayer(_Layer):
         self.ret = ret
         self.last_only = last_only
         self.scope = scope
+        self.bidirectional = bidirectional
 
     @staticmethod
     def length(sequence):
@@ -336,21 +337,6 @@ class LSTMLayer(_Layer):
         length = tf.reduce_sum(used, reduction_indices=1)
         return tf.cast(length, tf.int32)
 
-    @staticmethod
-    def get_last_outputs(n_output_features: int, outputs: tf.Tensor, lengths, output_name: Optional[str]=None):
-        # from https://github.com/aymericdamien/TensorFlowExamples/blob/master/examples/3_NeuralNetworks/dynamic_rnn.py
-        # TensorFlow doesn't support advanced indexing yet; for each sample, this gets its length and gets the
-        # last (non-padding) output
-
-        n_seqs = tf.shape(outputs)[0]
-        max_seq_len = tf.shape(outputs)[1]
-
-        index = tf.range(0, n_seqs) * max_seq_len + (lengths - 1)
-
-        outputs = tf.gather(tf.reshape(outputs, [-1, n_output_features]), index)  # flatten time dimension, select proper timestep for each seq
-        outputs = tf.reshape(outputs, (-1, n_output_features), name=output_name)  # so TF has explicit shape information about this tensor
-        return outputs
-
     def apply(self, inputs: _OneOrMore(tf.Tensor), is_training: tf.Tensor) -> _OneOrMore(tf.Tensor):
         params = self.params.copy()
         params['initializer'] = params['initializer']()
@@ -359,18 +345,31 @@ class LSTMLayer(_Layer):
             cells = tf.nn.rnn_cell.MultiRNNCell([tf.nn.rnn_cell.LSTMCell(n_units, **params) for n_units in self.n_units])
 
             lengths = LSTMLayer.length(inputs)
-            output, state = tf.nn.dynamic_rnn(cells, inputs, dtype=tf.float32, sequence_length=lengths)
-            state = state[-1].c  # cell state, not hidden state (which is output) of the last LSTM layer
+
+            if self.bidirectional:
+                output, state = tf.nn.bidirectional_dynamic_rnn(cells, cells, inputs, dtype=tf.float32, sequence_length=lengths)
+                if self.last_only:
+                    # state has values for each layer (output is always from last LSTM layer). We just want the state
+                    # from the final layer, so [-1]; c for cell state (as opposed to h for hidden state (same as output))
+                    output = tf.concat([s[-1].h for s in state], axis=-1)
+                else:
+                    output = tf.concat(output, axis=-1)
+
+                state = tf.concat([s[-1].c for s in state], axis=-1)
+            else:
+                output, state = tf.nn.dynamic_rnn(cells, inputs, dtype=tf.float32, sequence_length=lengths)
+
+                if self.last_only:
+                    output = state[-1].h
+
+                state = state[-1].c
 
             outputs = []
             if self.ret in ['state', 'both']:
                 outputs.append(state)
 
             if self.ret in ['output', 'both']:
-                if self.last_only:
-                    outputs.append(LSTMLayer.get_last_outputs(self.n_units[-1], output, lengths, 'lstm_out'))
-                else:
-                    outputs.append(output)
+                outputs.append(output)
             return outputs if len(outputs) > 1 else outputs[0]
 
     def __eq__(self, other):
