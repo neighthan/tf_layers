@@ -466,6 +466,11 @@ class BaseNN(object):
                   completed
         """
 
+        # passing in a pd.Series or pd.DataFrame instead of an ndarray is too easy of a mistake to make
+        for data in [train_inputs, train_labels, dev_inputs, dev_labels]:
+            assert type(data) in (None, np.ndarray) or type(data) == dict and sum(type(val) != np.ndarray for val in data.values()) == 0,\
+                'Ensure your data (inputs/labels) are given as numpy arrays'
+
         start_time = time.time()
 
         if verbose == 3:
@@ -510,7 +515,7 @@ class BaseNN(object):
 
                 self.sess.run(self.local_init)
                 batches = batch_range(n_train_batches_per_epoch)
-                ret = self._batch(metric_ops + [self.loss_op, self.train_op], train_inputs, train_labels, batches, train_idx,
+                ret = self._batch(metric_ops + [self.train_op], train_inputs, train_labels, batches, train_idx,
                                   is_training=True, dataset=self.uses_dataset, generator=train_generator)
                 ret = np.array(ret)
                 train_loss = ret[-2, :].mean()
@@ -615,6 +620,7 @@ class NN(BaseNN):
             random_state:                     int = 521,
             data_params: Optional[Dict[str, Any]] = None,
             log_to_bson:                     bool = False,
+            early_stop_metric_name:           str = 'dev_loss',
             overwrite_saved:                 bool = False,
             # begin class specific parameters
             l2_lambda: Optional[float] = None,
@@ -628,7 +634,7 @@ class NN(BaseNN):
     ):
         load_model = models_dir and model_name and os.path.isdir(f'{models_dir}/{model_name}/') and not overwrite_saved
         super().__init__(input_spec, layers, models_dir, n_regress_tasks, n_classes, task_names, config, model_name,
-                         batch_size, record, random_state, data_params, log_to_bson, early_stop_metric_name='acc_default',
+                         batch_size, record, random_state, data_params, log_to_bson, early_stop_metric_name=early_stop_metric_name,
                          uses_dataset=False, overwrite_saved=overwrite_saved)
 
         if not load_model:
@@ -708,6 +714,8 @@ class NN(BaseNN):
                     self.predict[name] = tf.layers.dense(hidden, 1, activation=None)
                     self.loss_ops[name] = tf.losses.mean_squared_error(self.labels_p[name], self.predict[name], scope='mse')
 
+            self.metrics.update({self.loss_ops[name].name.replace('/value:0', '').replace('/', '_'): self.loss_ops[name]
+                                 for name in self.loss_ops})
             self.global_step = tf.Variable(0, trainable=False, name='global_step')
 
             self.learning_rate = tf.Variable(self.learning_rate, trainable=False, name='learning_rate')
@@ -741,9 +749,6 @@ class NN(BaseNN):
                 # TODO: change train to work with this
 
             self.global_init = tf.global_variables_initializer()
-
-            self.early_stop_metric_name = self.params['early_stop_metric_name'] = 'acc_default'
-            self.uses_dataset = self.params['uses_dataset'] = False
 
     def _check_graph(self):
         super()._check_graph()
