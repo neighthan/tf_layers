@@ -468,8 +468,8 @@ class BaseNN(object):
 
         # passing in a pd.Series or pd.DataFrame instead of an ndarray is too easy of a mistake to make
         for data in [train_inputs, train_labels, dev_inputs, dev_labels]:
-            assert type(data) in (None, np.ndarray) or type(data) == dict and sum(type(val) != np.ndarray for val in data.values()) == 0,\
-                'Ensure your data (inputs/labels) are given as numpy arrays'
+            assert type(data) in (type(None), np.ndarray) or (type(data) == dict and sum(type(val) != np.ndarray for val in data.values()) == 0),\
+                f'Ensure your data (inputs/labels) are given as numpy arrays (given type was {type(data)})'
 
         start_time = time.time()
 
