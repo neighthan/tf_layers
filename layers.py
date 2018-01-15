@@ -475,3 +475,20 @@ def add_implied_layers(layers: List[Union[_Layer, List[_Layer]]]) -> List[_Layer
 
         last_layer_was_branch = (type(layer) == BranchedLayer)
     return new_layers
+
+
+def get_inputs_from_spec(input_spec: Dict[str, tuple]) -> Dict[str, tf.Tensor]:
+    return {name: tf.placeholder(getattr(tf, input_spec[name][1]), name=f'inputs_p_{name}',
+                                 shape=(None, *input_spec[name][0]))
+            for name in input_spec}
+
+
+def test_layers(layers: List[_Layer], input_spec: Dict[str, tuple]) -> None:
+    inputs = get_inputs_from_spec(input_spec)
+    print("Inputs: ", inputs)
+
+    hidden = list(inputs.values())
+    for layer in layers:
+        print(layer)
+        hidden = layer.apply(hidden, False)
+        print(hidden)

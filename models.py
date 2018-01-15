@@ -13,9 +13,7 @@ from ast import literal_eval
 from tempfile import TemporaryDirectory
 import shutil
 from typing import List, Optional, Dict, Any, Union, Sequence, Callable
-from computer_vision.scripts.utils import get_abs_path, acc_at_k
-from tf_layers.layers import ConvLayer, MaxPoolLayer, AvgPoolLayer, BranchedLayer, MergeLayer, LayerModule,\
-    FlattenLayer, DenseLayer, DropoutLayer, GlobalAvgPoolLayer, GlobalMaxPoolLayer, LSTMLayer, _Layer
+from tf_layers.layers import _Layer
 from tf_layers.tf_utils import tf_init, n_model_parameters
 import warnings
 
@@ -34,12 +32,6 @@ _activations = {
     'relu': tf.nn.relu,
     'prelu': activations.prelu
 }
-
-
-def get_inputs_from_spec(input_spec: Dict[str, tuple]) -> Dict[str, tf.Tensor]:
-    return {name: tf.placeholder(getattr(tf, input_spec[name][1]), name=f'inputs_p_{name}',
-                                 shape=(None, *input_spec[name][0]))
-            for name in input_spec}
 
 
 class BaseNN(object):
@@ -778,8 +770,8 @@ class NN(BaseNN):
             return new_metric > old_metric
 
     def score(self, inputs, labels):
-        probs = self.predict_proba(inputs)
-        return acc_at_k(1, probs, labels), acc_at_k(5, probs, labels)
+        # probs = self.predict_proba(inputs)
+        raise NotImplemented
 
 
 class CNN2(BaseNN):
